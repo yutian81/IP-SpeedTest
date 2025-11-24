@@ -1,0 +1,183 @@
+name: iptest自动构建与发布
+
+# 定义全局环境变量
+env:
+  APP_NAME: iptest
+
+on:
+  workflow_dispatch: # 手动触发
+  push:
+    branches: [master]
+    paths:
+      - 'main.go'
+      - 'go.mod'
+      - 'go.sum'
+      - 'version'
+
+permissions:
+  contents: write # 需要写入权限来创建 Tag 和 Release
+  packages: write
+
+jobs:
+  # 步骤 1: 准备版本号，更新文件，推送 Git Tag，并显式创建 GitHub Release (只运行一次)
+  prepare-version:
+    name: 1. 准备版本号并创建草稿 Release
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.generate_version.outputs.new_version }}
+    
+    steps:
+      - name: 1. 检出代码 (获取所有历史记录，以便计算 Tag)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 必须获取所有 Tag 才能使用 git describe
+
+      - name: 2. 计算新版本、更新文件并推送
+        id: generate_version
+        run: |
+          # --- 1. 版本获取逻辑：优先从 Git Tag 获取，否则从 version 文件，最后是 v1.0.0 ---
+          DEFAULT_TAG="v1.0.0"
+          
+          if [ -f version ]; then
+            # 读取 version 文件内容并清理空格
+            VERSION_FROM_FILE=$(cat version | tr -d '[:space:]')
+            if [[ "$VERSION_FROM_FILE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              DEFAULT_TAG="$VERSION_FROM_FILE"
+            fi
+          fi
+          
+          # 尝试获取最新 Git Tag，如果不存在，则使用 DEFAULT_TAG 作为起点
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "$DEFAULT_TAG")
+          echo "用于计算的最新 Tag: $LATEST_TAG"
+
+          # 解析版本号 (假设格式是 vX.Y.Z)
+          VERSION_PARTS=$(echo "$LATEST_TAG" | tr -d 'v' | tr '.' ' ')
+          read -r MAJOR MINOR PATCH <<< "$VERSION_PARTS"
+
+          # 版本号递增逻辑：修订号 + 1
+          if ! [[ "$PATCH" =~ ^[0-9]+$ ]]; then
+            NEW_VERSION="$DEFAULT_TAG" 
+            echo "无法解析修订号，使用默认版本: $NEW_VERSION"
+          else
+            NEW_PATCH=$((PATCH + 1))
+            NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
+          fi
+          
+          echo "计算出的新版本: $NEW_VERSION"
+
+          # --- 2. 更新文件、提交 Commit 和推送 Tag ---
+          if git tag -l | grep -q "^$NEW_VERSION$"; then
+            echo "Tag $NEW_VERSION 已存在。跳过文件更新、Tag 推送和 Release 创建。"
+          else
+            echo "SHOULD_CREATE_RELEASE=true" >> $GITHUB_ENV
+            
+            # 1. 更新 version 文件
+            echo "$NEW_VERSION" > version
+            
+            # 2. 配置 Git 用户
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+
+            # 3. 提交 Commit (使用 [skip ci] 标记以避免无限循环)
+            if [ -n "$(git status --porcelain)" ]; then
+                git add version
+                git commit -m "chore: 自动更新版本到 $NEW_VERSION [skip ci]"
+                
+                # 推送 Commit 到 master (可能引发新的工作流，但 [skip ci] 应该阻止)
+                echo "正在推送 version 文件更新 Commit 到 master。"
+                git push origin master
+
+                # 推送 Git Tag
+                echo "正在创建并推送 Tag: $NEW_VERSION"
+                git tag "$NEW_VERSION"
+                git push origin "$NEW_VERSION"
+            fi
+          fi
+          
+          # 设置 Job Output 供后续 Job 使用
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+      
+      # 3. 使用 softprops 显式创建 Release (必须是草稿)
+      - name: 3. 创建 GitHub 草稿 Release
+        if: env.SHOULD_CREATE_RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.generate_version.outputs.new_version }}
+          name: ${{ env.APP_NAME }} 版本 ${{ steps.generate_version.outputs.new_version }}
+          draft: true # 必须是草稿，以等待所有资产上传完毕
+          body: |
+            ## 新版本 ${{ steps.generate_version.outputs.new_version }}
+            
+            多平台资产将很快附加。
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+
+  # 步骤 2: 构建二进制文件并上传到已存在的 Draft Release (并发运行)
+  build_and_upload:
+    name: '2. 构建和上传: ${{ matrix.goos }}-${{ matrix.goarch }}'
+    needs: prepare-version # 依赖于版本准备 Job
+    runs-on: ubuntu-latest
+    if: success()
+    
+    strategy:
+      matrix:
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64]
+
+    steps:
+      - name: 1. 检出代码
+        uses: actions/checkout@v4
+      
+      - name: 2. 构建并上传资产
+        uses: wangyoucao577/go-release-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          goos: ${{ matrix.goos }}
+          goarch: ${{ matrix.goarch }}
+          goversion: 1.21
+          binary_name: ${{ env.APP_NAME }}
+          ldflags: -s -w -X "main.version=${{ needs.prepare-version.outputs.new_version }}"
+          create_release: false # Release 已由 Job 1 创建，此处只上传
+          release_tag: ${{ needs.prepare-version.outputs.new_version }}
+          asset_name: "${{ env.APP_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          compress_assets: true
+
+  # 步骤 3: 自动将草稿 Release 发布为正式版 (所有构建 Job 成功后运行)
+  publish_release:
+    name: 3. 自动发布正式版本
+    runs-on: ubuntu-latest
+    needs: [prepare-version, build_and_upload] # 依赖于版本和所有上传 Job
+    if: success() && needs.prepare-version.outputs.new_version != '' # 仅在成功创建新版本时发布
+    
+    steps:
+      - name: 安装 jq (用于解析 JSON)
+        run: sudo apt-get update && sudo apt-get install jq -y
+      
+      - name: 发布 Release (通过 GitHub API)
+        run: |
+          RELEASE_TAG="${{ needs.prepare-version.outputs.new_version }}"
+          REPO="${{ github.repository }}"
+          
+          echo "所有资产已上传完成，准备发布 Release: $RELEASE_TAG"
+
+          # 1. 通过 Tag 获取 Release ID
+          RELEASE_ID=$(curl -s -X GET \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG" | jq -r '.id')
+          
+          if [ "$RELEASE_ID" == "null" ] || [ -z "$RELEASE_ID" ]; then
+            echo "错误: 找不到 Tag $RELEASE_TAG 对应的 Release ID。可能已被手动删除或发布。"
+            exit 1
+          fi
+
+          # 2. 使用 ID 将 Release 从草稿 (draft) 状态改为正式发布
+          echo "正在将 Release ID: $RELEASE_ID 标记为正式发布。"
+          curl -X PATCH \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/$REPO/releases/$RELEASE_ID" \
+            -d '{"draft": false}'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -1,5 +1,6 @@
 name: Auto Build & Release
 
+# 仅在 master 分支上的特定 Go 文件发生变化时触发
 on:
   workflow_dispatch:
   push:
@@ -10,57 +11,88 @@ on:
       - 'go.sum'
 
 permissions:
-  contents: write  # 需要写入权限来创建 Tag 和 Release
+  contents: write
 
 jobs:
-  # 步骤 1: 计算新版本号并创建 Git Tag
+  # 步骤 1: 准备版本号，推送 Git Tag，并显式创建 GitHub Release (只运行一次)
   prepare-version:
     runs-on: ubuntu-latest
     outputs:
       new_version: ${{ steps.generate_version.outputs.new_version }}
     
     steps:
-      - name: Checkout Code
+      - name: 1. Checkout Code (Fetch all history for tagging)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 0 # 必须获取所有 Tag 才能使用 git describe
 
-      - name: Generate and Tag New Version
+      - name: 2. Calculate New Version and Push Tag
         id: generate_version
         run: |
-          # --- 1. 获取最新版本并计算新版本号 ---
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v1.0.0")
-          echo "Latest tag found: $LATEST_TAG"
+          DEFAULT_TAG="v1.0.0"
 
-          # 提取并增加修订号
+          # --- 1. 定义默认 Tag 的获取逻辑：优先读取 version 文件 ---
+          if [ -f version ]; then
+            VERSION_FROM_FILE=$(cat version | tr -d '[:space:]')
+            if [[ "$VERSION_FROM_FILE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              DEFAULT_TAG="$VERSION_FROM_FILE"
+              echo "使用version文件中的默认版本号: $DEFAULT_TAG"
+            else
+              echo "version文件 ($VERSION_FROM_FILE) 内容无效，使用回退版本: $DEFAULT_TAG"
+            fi
+          else
+            echo "未找到version文件，使用回退版本: $DEFAULT_TAG"
+          fi
+          
+          # 尝试获取最新 Git Tag，如果不存在，则使用 DEFAULT_TAG 作为起点
+          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "$DEFAULT_TAG")
+          echo "Latest tag used for calculation: $LATEST_TAG"
+
+          # --- 2. 解析版本号并递增 ---
           MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | tr -d 'v')
           MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
           PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
 
-          # 如果找不到有效的 PATCH 号，则从 v1.0.0 开始
+          # 版本号递增逻辑
           if ! [[ "$PATCH" =~ ^[0-9]+$ ]]; then
-            echo "Failed to parse patch number, defaulting to v1.0.0"
-            NEW_VERSION="v1.0.0"
+            NEW_VERSION="$DEFAULT_TAG" 
+            echo "Failed to parse patch number, resetting to default version: $NEW_VERSION"
           else
             NEW_PATCH=$((PATCH + 1))
             NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
           fi
           
-          echo "New version: $NEW_VERSION"
+          echo "New calculated version: $NEW_VERSION"
 
-          # --- 2. 创建并推送 Git Tag ---
+          # --- 3. 创建并推送 Git Tag ---
           if git tag -l | grep -q "^$NEW_VERSION$"; then
-            echo "Tag $NEW_VERSION already exists. Skipping tag creation."
+            echo "Tag $NEW_VERSION already exists. Skipping tag push and release creation."
           else
             echo "Creating and pushing tag $NEW_VERSION"
             git tag "$NEW_VERSION"
             git push origin "$NEW_VERSION"
+            echo "SHOULD_CREATE_RELEASE=true" >> $GITHUB_ENV
           fi
           
-          # --- 3. 设置 Job Output 供后续 Job 使用 ---
+          # 设置 Job Output 供后续 Job 使用
           echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+      
+      # 3. 关键步骤：使用 softprops 显式创建 Release
+      - name: 3. Create GitHub Draft Release
+        if: env.SHOULD_CREATE_RELEASE == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.generate_version.outputs.new_version }}
+          name: Release ${{ steps.generate_version.outputs.new_version }}
+          draft: true # 创建为草稿，资产上传完成后可手动发布
+          body: |
+            ## New Release ${{ steps.generate_version.outputs.new_version }}
+            Multi-platform assets will be attached shortly.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 步骤 2: 构建二进制文件并发布到 Release
+
+  # 构建二进制文件并上传到已存在的 Draft Release (并发运行)
   build-and-release:
     needs: prepare-version # 依赖于版本准备 Job
     runs-on: ubuntu-latest
@@ -69,15 +101,16 @@ jobs:
     strategy:
       matrix:
         goos: [linux, windows, darwin]
-        goarch: [amd64, arm64] # 简化了架构，以避免 386 和 arm 经常出现的依赖问题
+        goarch: [amd64, arm64] 
         exclude:
           - goarch: arm64
             goos: windows
 
     steps:
-      - uses: actions/checkout@v4
+      - name: 1. Checkout Code
+        uses: actions/checkout@v4
       
-      - name: Build Go Binary and Upload to Release
+      - name: 2. Build and Upload Assets
         uses: wangyoucao577/go-release-action@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}

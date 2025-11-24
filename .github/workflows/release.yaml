@@ -41,4 +41,4 @@ jobs:
           release_tag: ${{ github.ref_name }}  # 使用 Tag 作为 Release 的版本号
           create_release: true  # 自动创建 Release
           asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}.zip" # 自定义 Release 文件名为 ZIP 格式
-          compress_assets: true  # 启用压缩功能
+          compress_assets: false  # 关闭压缩功能

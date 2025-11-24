@@ -11,10 +11,6 @@ permissions:
   contents: write
   packages: write
 
-concurrency:
-  group: ${{ github.ref }}-${{ github.workflow }}
-  cancel-in-progress: true
-
 env:
   BIN_NAME: iptest
 

@@ -84,4 +84,5 @@ jobs:
           release_name: ${{ env.BIN_NAME}}
           release_tag: ${{ env.NEW_VERSION }}
           asset_name: "${{ env.BIN_NAME}}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          create_release: true
           compress_assets: true  # 启用压缩功能

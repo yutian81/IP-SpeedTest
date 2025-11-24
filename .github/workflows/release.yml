@@ -3,6 +3,8 @@ name: Auto Build & Release
 # 仅在 master 分支上的特定 Go 文件发生变化时触发
 on:
   workflow_dispatch:
+  release:
+    types: [created]
   push:
     branches: [master]
     paths:
@@ -12,114 +14,25 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 jobs:
-  # 步骤 1: 准备版本号，推送 Git Tag，并显式创建 GitHub Release (只运行一次)
-  prepare-version:
+  build-go-binary:
     runs-on: ubuntu-latest
-    outputs:
-      new_version: ${{ steps.generate_version.outputs.new_version }}
-    
-    steps:
-      - name: 1. Checkout Code (Fetch all history for tagging)
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # 必须获取所有 Tag 才能使用 git describe
-
-      - name: 2. Calculate New Version and Push Tag
-        id: generate_version
-        run: |
-          DEFAULT_TAG="v1.0.0"
-
-          # --- 1. 定义默认 Tag 的获取逻辑：优先读取 version 文件 ---
-          if [ -f version ]; then
-            VERSION_FROM_FILE=$(cat version | tr -d '[:space:]')
-            if [[ "$VERSION_FROM_FILE" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-              DEFAULT_TAG="$VERSION_FROM_FILE"
-              echo "使用version文件中的默认版本号: $DEFAULT_TAG"
-            else
-              echo "version文件 ($VERSION_FROM_FILE) 内容无效，使用回退版本: $DEFAULT_TAG"
-            fi
-          else
-            echo "未找到version文件，使用回退版本: $DEFAULT_TAG"
-          fi
-          
-          # 尝试获取最新 Git Tag，如果不存在，则使用 DEFAULT_TAG 作为起点
-          LATEST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "$DEFAULT_TAG")
-          echo "Latest tag used for calculation: $LATEST_TAG"
-
-          # --- 2. 解析版本号并递增 ---
-          MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | tr -d 'v')
-          MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
-          PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
-
-          # 版本号递增逻辑
-          if ! [[ "$PATCH" =~ ^[0-9]+$ ]]; then
-            NEW_VERSION="$DEFAULT_TAG" 
-            echo "Failed to parse patch number, resetting to default version: $NEW_VERSION"
-          else
-            NEW_PATCH=$((PATCH + 1))
-            NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
-          fi
-          
-          echo "New calculated version: $NEW_VERSION"
-
-          # --- 3. 创建并推送 Git Tag ---
-          if git tag -l | grep -q "^$NEW_VERSION$"; then
-            echo "Tag $NEW_VERSION already exists. Skipping tag push and release creation."
-          else
-            echo "Creating and pushing tag $NEW_VERSION"
-            git tag "$NEW_VERSION"
-            git push origin "$NEW_VERSION"
-            echo "SHOULD_CREATE_RELEASE=true" >> $GITHUB_ENV
-          fi
-          
-          # 设置 Job Output 供后续 Job 使用
-          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
-      
-      # 3. 关键步骤：使用 softprops 显式创建 Release
-      - name: 3. Create GitHub Draft Release
-        if: env.SHOULD_CREATE_RELEASE == 'true'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.generate_version.outputs.new_version }}
-          name: Release ${{ steps.generate_version.outputs.new_version }}
-          draft: true # 创建为草稿，资产上传完成后可手动发布
-          body: |
-            ## New Release ${{ steps.generate_version.outputs.new_version }}
-            Multi-platform assets will be attached shortly.
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-
-  # 构建二进制文件并上传到已存在的 Draft Release (并发运行)
-  build-and-release:
-    needs: prepare-version # 依赖于版本准备 Job
-    runs-on: ubuntu-latest
-    if: success()
-    
     strategy:
       matrix:
-        goos: [linux, windows, darwin]
-        goarch: [amd64, arm64] 
-        exclude:
-          - goarch: arm64
-            goos: windows
+        goos: [linux, windows, darwin] # 需要打包的系统
+        goarch: [amd64, arm64] # 需要打包的架构
 
     steps:
-      - name: 1. Checkout Code
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
       
-      - name: 2. Build and Upload Assets
-        uses: wangyoucao577/go-release-action@v1
+      - uses: wangyoucao577/go-release-action@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          goversion: 1.21
-          binary_name: "iptest"
-          ldflags: -s -w -X "main.version=${{ needs.prepare-version.outputs.new_version }}"
-          create_release: false 
-          release_tag: ${{ needs.prepare-version.outputs.new_version }} 
-          asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}"
-          compress_assets: true
+          goversion: 1.21 # 可以指定编译使用的 Golang 版本
+          binary_name: "iptest" # 可以指定二进制文件的名称
+          ldflags: -s -w -X "main.version=${{ github.ref_name }}"
+          md5sum: false

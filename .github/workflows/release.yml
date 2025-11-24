@@ -1,23 +1,41 @@
-name: build release
+name: Auto Build & Release
 
 on:
   workflow_dispatch:
   push:
-    tags:
-      - 'v*.*.*'  # 匹配以 v 开头，后跟数字的 Tag，例如 v1.0.0
+    paths:
+      - version  # 当 version 文件被修改 push 时触发
 
 permissions:
   contents: write
   packages: write
 
 jobs:
-  build-go-binary:
+  set-release-version:
     runs-on: ubuntu-latest
+    outputs:
+      release_version: ${{ steps.set_version.outputs.release_version }}
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Read version file
+        id: set_version
+        run: |
+          version=$(cat version)
+          echo "Using version: $version"
+          echo "release_version=$version" >> $GITHUB_OUTPUT
+
+  build-go-binary:
+    needs: set-release-version
+    runs-on: ubuntu-latest
+    env:
+      BIN_NAME: iptest
+      RELEASE_VERSION: ${{ needs.set-release-version.outputs.release_version }}
     strategy:
       matrix:
-        goos: [linux, windows, darwin] # 需要打包的系统
-        goarch: [amd64, arm64, arm, 386] # 需要打包的架构
-        exclude: # 排除某些平台和架构
+        goos: [linux, windows, darwin]
+        goarch: [amd64, arm64, arm, 386]
+        exclude:
           - goarch: arm64
             goos: windows
           - goarch: 386
@@ -28,17 +46,18 @@ jobs:
             goos: darwin
 
     steps:
-      - uses: actions/checkout@v3
-      - uses: wangyoucao577/go-release-action@v1
+      - uses: actions/checkout@v4
+
+      - uses: wangyoucao577/go-release-action@v5
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          goversion: 1.21 # 可以指定编译使用的 Golang 版本
-          binary_name: "iptest" # 使用固定的二进制文件名
-          ldflags: -s -w -X "main.version=${{ github.ref_name }}" # 将版本号注入到 Go 二进制文件
+          goversion: 1.21
+          binary_name: ${{ env.BIN_NAME }}
+          ldflags: -s -w -X "main.version=${{ env.RELEASE_VERSION }}"
           md5sum: false
-          release_name: IPTest
-          release_tag: ${{ github.ref_name }}  # 使用 Tag 作为 Release 的版本号
-          asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}" # 自定义 Release 文件名
-          compress_assets: true  # 启用压缩功能
+          release_name: "${{ env.BIN_NAME }} ${{ env.RELEASE_VERSION }}"
+          release_tag: ${{ env.RELEASE_VERSION }}
+          asset_name: "${{ env.BIN_NAME }}-${{ matrix.goos }}-${{ matrix.goarch }}"
+          compress_assets: true

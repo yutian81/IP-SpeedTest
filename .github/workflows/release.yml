@@ -30,3 +30,4 @@ jobs:
           asset_name: iptest-${{ matrix.goos }}-${{ matrix.goarch }}
           ldflags: -s -w -X "main.version=${{ github.ref_name }}"
           md5sum: false
+          compress_assets: false

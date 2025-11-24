@@ -39,7 +39,7 @@ jobs:
           binary_name: "iptest" # 使用固定的二进制文件名
           ldflags: -s -w -X "main.version=${{ github.ref_name }}" # 将版本号注入到 Go 二进制文件
           md5sum: false
-          release_name: iptest
+          release_name: IPTest
           release_tag: ${{ github.ref_name }}  # 使用 Tag 作为 Release 的版本号
           asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}.zip" # 自定义 Release 文件名为 ZIP 格式
           compress_assets: false  # 关闭压缩功能

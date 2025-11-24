@@ -69,6 +69,12 @@ jobs:
 
           # 设置环境变量供后续 steps 使用
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+
+          # 更新仓库version文件
+          echo "$NEW_VERSION" > version
+          git add version
+          git commit -m "Update version to $NEW_VERSION" || echo "No changes to commit"
+          git push || echo "Push failed, possibly no changes"
       
       - uses: wangyoucao577/go-release-action@v1
         with:
@@ -76,7 +82,7 @@ jobs:
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
           goversion: 1.21
-          binary_name: "iptest"
+          binary_name: ${{ env.BIN_NAME}}
           ldflags: -s -w -X "main.version=${{ env.NEW_VERSION }}" # 将版本号注入到 Go 二进制文件
           md5sum: false
           release_name: ${{ env.BIN_NAME}}

@@ -1,6 +1,7 @@
 name: build release
 
 on:
+  workflow_dispatch:
   push:
     tags:
       - 'v*.*.*'  # 匹配以 v 开头，后跟数字的 Tag，例如 v1.0.0

@@ -7,6 +7,7 @@ on:
     paths:
       - version
       - main.go
+
 permissions:
   contents: write
   packages: write
@@ -18,6 +19,7 @@ concurrency:
 jobs:
   build-go-binary:
     runs-on: ubuntu-latest
+    
     strategy:
       matrix:
         goos: [linux, windows, darwin]
@@ -27,14 +29,14 @@ jobs:
             goos: windows
           - goarch: 386 
             goos: darwin 
-          # arm 排除
           - goarch: arm
             goos: windows
           - goarch: arm
             goos: darwin
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+     
       - name: Get latest tag
         id: get_latest_tag
         run: |
@@ -47,12 +49,12 @@ jobs:
           fi
           echo "Latest tag: $LATEST_TAG"
           echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
+      
       - name: Generate new version
         id: generate_version
         run: |
           LATEST_TAG=${{ env.LATEST_TAG }}
           if [[ -z "$LATEST_TAG" ]]; then
-            # 如果没有 Tag，使用默认值
             LATEST_TAG="$DEFAULT_TAG"
           fi
           # 提取主版本号、次版本号和修订号
@@ -67,14 +69,14 @@ jobs:
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
       - uses: wangyoucao577/go-release-action@v1
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }} # 一个默认的变量，用来实现往 Release 中添加文件
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          goversion: 1.21 # 可以指定编译使用的 Golang 版本
-          binary_name: "iptest" # 使用固定的二进制文件名
+          goversion: 1.21
+          binary_name: "iptest"
           ldflags: -s -w -X "main.version=${{ env.NEW_VERSION }}" # 将版本号注入到 Go 二进制文件
           md5sum: false
-          release_tag: ${{ env.NEW_VERSION }}  # 使用新版本号作为 Release 的 Tag
-          create_release: true  # 自动创建 Release
-          asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}.zip" # 自定义 Release 文件名为 ZIP 格式
+          release_tag: ${{ env.NEW_VERSION }}
+          create_release: true
+          asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}"
           compress_assets: true  # 启用压缩功能

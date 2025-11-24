@@ -5,7 +5,6 @@ on:
   push:
     branches: [master]
     paths:
-      - version
       - main.go
 
 permissions:
@@ -15,6 +14,9 @@ permissions:
 concurrency:
   group: ${{ github.ref }}-${{ github.workflow }}
   cancel-in-progress: true
+
+env:
+  BIN_NAME: iptest
 
 jobs:
   build-go-binary:
@@ -37,36 +39,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
      
-      - name: Get latest tag
-        id: get_latest_tag
+      - name: Generate new version
+        id: generate_version
         run: |
-          DEFAULT_TAG="v1.0.3"  # 默认值
-          # 检查是否存在 Tag，如果不存在则使用默认值
+          if [ -f version ]; then
+            DEFAULT_TAG=$(cat version)
+          else
+            echo "version 文件不存在，使用 v1.0.0 作为默认值"
+            DEFAULT_TAG="v1.0.0"
+          fi
+
+          # 获取最新 tag，如果没有 tag 则使用默认值
           if git tag --list | grep -q .; then
             LATEST_TAG=$(git describe --tags --abbrev=0)
           else
             LATEST_TAG="$DEFAULT_TAG"
           fi
           echo "Latest tag: $LATEST_TAG"
-          echo "LATEST_TAG=$LATEST_TAG" >> $GITHUB_ENV
-      
-      - name: Generate new version
-        id: generate_version
-        run: |
-          LATEST_TAG=${{ env.LATEST_TAG }}
-          if [[ -z "$LATEST_TAG" ]]; then
-            LATEST_TAG="$DEFAULT_TAG"
-          fi
+
           # 提取主版本号、次版本号和修订号
           MAJOR=$(echo "$LATEST_TAG" | cut -d. -f1 | tr -d 'v')
           MINOR=$(echo "$LATEST_TAG" | cut -d. -f2)
           PATCH=$(echo "$LATEST_TAG" | cut -d. -f3)
+
           # 增加修订号
           NEW_PATCH=$((PATCH + 1))
-          # 生成新版本号
           NEW_VERSION="v${MAJOR}.${MINOR}.${NEW_PATCH}"
           echo "New version: $NEW_VERSION"
+
+          # 设置环境变量供后续 steps 使用
           echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+      
       - uses: wangyoucao577/go-release-action@v1
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -76,7 +79,7 @@ jobs:
           binary_name: "iptest"
           ldflags: -s -w -X "main.version=${{ env.NEW_VERSION }}" # 将版本号注入到 Go 二进制文件
           md5sum: false
+          release_name: ${{ env.BIN_NAME}}
           release_tag: ${{ env.NEW_VERSION }}
-          create_release: true
-          asset_name: "iptest-${{ matrix.goos }}-${{ matrix.goarch }}"
+          asset_name: "${{ env.BIN_NAME}}-${{ matrix.goos }}-${{ matrix.goarch }}"
           compress_assets: true  # 启用压缩功能

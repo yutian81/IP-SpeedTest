@@ -1,16 +1,9 @@
 name: Auto Build & Release
 
-# 仅在 master 分支上的特定 Go 文件发生变化时触发
 on:
   workflow_dispatch:
   release:
     types: [created]
-  push:
-    branches: [master]
-    paths:
-      - 'main.go'
-      - 'go.mod'
-      - 'go.sum'
 
 permissions:
   contents: write

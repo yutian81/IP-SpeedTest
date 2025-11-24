@@ -11,9 +11,6 @@ permissions:
   contents: write
   packages: write
 
-env:
-  BIN_NAME: iptest
-
 jobs:
   build-go-binary:
     runs-on: ubuntu-latest
@@ -78,10 +75,9 @@ jobs:
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
           goversion: 1.21
-          binary_name: ${{ env.BIN_NAME}}
+          binary_name: "iptest"
           ldflags: -s -w -X "main.version=${{ env.NEW_VERSION }}" # 将版本号注入到 Go 二进制文件
           md5sum: false
-          release_name: ${{ env.BIN_NAME}}
           release_tag: ${{ env.NEW_VERSION }}
           asset_name: "${{ env.BIN_NAME}}-${{ matrix.goos }}-${{ matrix.goarch }}"
           create_release: true

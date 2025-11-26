@@ -15,7 +15,16 @@ jobs:
     strategy:
       matrix:
         goos: [linux, windows, darwin] # 需要打包的系统
-        goarch: [amd64, arm64] # 需要打包的架构
+        goarch: [amd64, arm64, 386, arm] # 需要打包的架构
+        exclude:
+          - goos: windows
+            goarch: 386
+          - goos: windows
+            goarch: arm
+          - goos: darwin
+            goarch: 386
+          - goos: darwin
+            goarch: arm
 
     steps:
       - uses: actions/checkout@v4
